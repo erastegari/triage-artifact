@@ -21,6 +21,7 @@ SCRIPTS = [
     "run_mc4_calibration.py",     # reference Brier + two-parameter recalibration (before/after)
     "run_mc5_fairness_ci.py",     # subgroup audit with bootstrap confidence intervals
     "run_mc6_outcome_sensitivity.py",  # Fail-vs-Withdraw outcome sensitivity
+    "run_mc7_fixed_model_inflation.py",# inflation with the fitted model held fixed (isolates evaluation-cohort effect)
 ]
 
 def main():
