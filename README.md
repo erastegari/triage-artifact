@@ -78,6 +78,7 @@ OULAD_DATA=/path/to/oulad python run_all.py
 | `run_mc4_calibration.py` | Reference Brier + two-parameter recalibration, before/after (table + figure) |
 | `run_mc5_fairness_ci.py` | Subgroup equity audit with 95% bootstrap confidence intervals |
 | `run_mc6_outcome_sensitivity.py` | Fail-vs-Withdraw outcome-definition sensitivity |
+| `run_mc7_fixed_model_inflation.py` | Eligibility inflation with the fitted model held fixed — isolates the evaluation-cohort effect from training-cohort effects |
 
 ## 6. Expected key results (for verification)
 
