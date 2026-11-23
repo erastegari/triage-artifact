@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
-"""MC7: isolate EVALUATION-COHORT inflation from TRAINING-COHORT effects.
+"""MC7: isolate EVALUATION-COHORT inflation with a single, fixed fitted model.
 
-Reviewer concern: MC1 fits logistic regression separately on the conventional and
-eligible populations, so its conventional-minus-eligible gap could reflect BOTH a
-change in the evaluated population AND a change in the fitted model (training on vs
-excluding already-withdrawn students). This script holds the FITTED MODEL FIXED and
-changes ONLY the evaluation population.
+Reviewer concern (resolved here): an earlier version of this check mixed out-of-fold
+predictions for eligible students with a full-fit model for withdrawn students, so the
+two populations were not scored by one identical model. This version removes that
+ambiguity by using one clearly defined prediction procedure for both populations:
 
-Design (development cohort 2013J, one fixed model per module x checkpoint):
-  1. Fit preprocessing (winsorize + standardize) on the ELIGIBLE (still-enrolled)
-     training data only -- the model a program could actually deploy.
-  2. Score eligible students out-of-fold (5-fold CV, trained on eligible only).
-  3. Score the already-withdrawn students with a logistic regression fit on ALL
-     eligible students. They are never in any training fold, so there is no leakage.
-  4. One coherent score vector over the whole registered cohort. Compute AUC two ways
-     with the SAME scores:
-        - ELIGIBLE evaluation       : AUC on still-enrolled students only.
-        - CONVENTIONAL (fixed model): AUC on all registered students.
-     The ONLY thing that differs is evaluation-set membership.
+  For each module x checkpoint:
+    1. Fit preprocessing (winsorize + standardize) on the ELIGIBLE (still-enrolled)
+       students of the DEVELOPMENT presentation (2013J).
+    2. Train ONE logistic regression on that eligible development sample.
+    3. Apply that identical fitted model, unchanged, to the held-out VALIDATION
+       presentation (2014J) -- an independent sample the model never saw.
+    4. Score every registered 2014J student once, then read AUC two ways from the
+       same score vector:
+          - ELIGIBLE evaluation       : still-enrolled 2014J students only.
+          - CONVENTIONAL evaluation   : all registered 2014J students.
+       The ONLY thing that differs between the two numbers is which students are in
+       the evaluation set. One model, one scoring pass, no leakage (2014J is never in
+       training).
 
-If inflation persists here (fixed model) at a magnitude similar to MC1 (refit per
-population), the inflation is an evaluation-population artifact, not something the model
-learned from withdrawn students.
+Inflation = AUC(conventional) - AUC(eligible). The eligible-evaluation number equals
+the logistic-regression transfer AUC already reported in Table 5, by construction.
 """
 import numpy as np, pandas as pd, warnings
 warnings.filterwarnings("ignore")
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import roc_auc_score
-from analysis_core import eligible, Preproc, MODULES, DEV, CHECKPOINTS
-
-cv = StratifiedKFold(5, shuffle=True, random_state=42)
+from analysis_core import eligible, Preproc, MODULES, DEV, VAL, CHECKPOINTS
 
 def cap_prec(y, p, b=0.20):
     k = max(1, round(b * len(y))); idx = np.argsort(-p)[:k]
@@ -39,39 +36,27 @@ def cap_prec(y, p, b=0.20):
 rows = []
 for mod in MODULES:
     for cp in CHECKPOINTS:
-        conv = eligible(mod, DEV, cp)                 # all registered
-        elig = conv[conv.eligible].copy()             # still-enrolled
-        wd   = conv[~conv.eligible].copy()            # already-withdrawn
+        dev = eligible(mod, DEV, cp)
+        dev_elig = dev[dev.eligible].copy()           # train only on still-enrolled dev students
 
-        # Preprocessing fit on eligible training data only (deployment-honest)
-        pp = Preproc().fit(elig)
-        Xe = pp.transform_scaled(elig)
-        ye = elig.at_risk.values
+        pp = Preproc().fit(dev_elig)
+        Xtr = pp.transform_scaled(dev_elig); ytr = dev_elig.at_risk.values
+        model = LogisticRegression(max_iter=2000).fit(Xtr, ytr)   # ONE fixed model
 
-        # (2) out-of-fold scores for eligible students (trained on eligible only)
-        oof = cross_val_predict(LogisticRegression(max_iter=2000), Xe, ye,
-                                cv=cv, method="predict_proba")[:, 1]
+        val = eligible(mod, VAL, cp)                  # held-out later presentation
+        m = val.eligible.values                       # still-enrolled mask in VAL
+        Xval = pp.transform_scaled(val)
+        p = model.predict_proba(Xval)[:, 1]           # one scoring pass over all registered VAL
+        y = val.at_risk.values
 
-        # (3) one fixed model fit on ALL eligible, used to score withdrawn students
-        fixed = LogisticRegression(max_iter=2000).fit(Xe, ye)
-        if len(wd):
-            Xw = pp.transform_scaled(wd)
-            sw = fixed.predict_proba(Xw)[:, 1]
-        else:
-            Xw = np.empty((0, Xe.shape[1])); sw = np.array([])
-
-        # (4) coherent score vector over the whole registered cohort
-        y_all = np.concatenate([ye, wd.at_risk.values])
-        p_all = np.concatenate([oof, sw])
-
-        auc_elig = roc_auc_score(ye, oof)
-        auc_conv = roc_auc_score(y_all, p_all)
-        cap_e, prec_e = cap_prec(ye, oof)
-        cap_c, prec_c = cap_prec(y_all, p_all)
+        auc_conv = roc_auc_score(y, p)
+        auc_elig = roc_auc_score(y[m], p[m])
+        cap_c, prec_c = cap_prec(y, p)
+        cap_e, prec_e = cap_prec(y[m], p[m])
 
         rows.append({
             "module": mod, "cp": cp,
-            "n_eligible": len(elig), "n_withdrawn": len(wd),
+            "n_eligible": int(m.sum()), "n_withdrawn": int((~m).sum()),
             "AUC_eligible": round(auc_elig, 3),
             "AUC_conventional_fixed": round(auc_conv, 3),
             "inflation_fixed_model": round(auc_conv - auc_elig, 3),
@@ -81,27 +66,23 @@ for mod in MODULES:
 
 res = pd.DataFrame(rows)
 
-# Pull MC1 (refit-per-population) inflation for side-by-side comparison, if present
+# Side-by-side with the refit-per-population inflation (MC1), if available
 try:
     mc1 = pd.read_csv("results/table_mc1_inflation_deltas.csv")[["module", "cp", "d_AUC"]]
-    mc1 = mc1.rename(columns={"d_AUC": "inflation_refit_MC1"})
-    res = res.merge(mc1, on=["module", "cp"], how="left")
+    res = res.merge(mc1.rename(columns={"d_AUC": "inflation_refit_MC1"}), on=["module", "cp"], how="left")
 except Exception:
     pass
 
 pd.set_option("display.width", 220)
-print("=== MC7: evaluation-cohort inflation with the FITTED MODEL HELD FIXED ===")
+print("=== MC7: evaluation-cohort inflation, ONE fixed model (train dev-eligible -> score held-out VAL) ===")
 cols = ["module", "cp", "n_eligible", "n_withdrawn",
         "AUC_eligible", "AUC_conventional_fixed", "inflation_fixed_model"]
 if "inflation_refit_MC1" in res.columns:
     cols += ["inflation_refit_MC1"]
 print(res[cols].to_string(index=False))
-
 print("\nMean inflation, fixed model (AUC) : %.3f" % res["inflation_fixed_model"].mean())
 if "inflation_refit_MC1" in res.columns:
     print("Mean inflation, refit  MC1 (AUC) : %.3f" % res["inflation_refit_MC1"].mean())
-    print("\nInterpretation: the two are close, so the conventional-vs-eligible gap is driven")
-    print("by WHICH STUDENTS ARE EVALUATED, not by retraining on already-withdrawn students.")
 
 res.to_csv("results/table_mc7_fixed_model_inflation.csv", index=False)
 print("\nsaved results/table_mc7_fixed_model_inflation.csv")
