@@ -23,11 +23,13 @@ eligible population:
 Full per-checkpoint table with F1: supplement Table S2.
 
 **Isolation check (`run_mc7_fixed_model_inflation.py`).** MC1 refits LR within each cohort, so its gap
-could in principle mix an evaluation-population change with a training-population change. Holding the
-fitted model fixed (one LR trained on the eligible population; only the evaluated set changes) reproduces
-the inflation almost exactly — **mean +0.065 AUC, identical to the refit version, within 0.002 at every
-checkpoint**. Eligibility inflation is therefore an artifact of *which students are evaluated*, not of
-retraining on already-withdrawn students. Supplement Table S2b.
+could in principle mix an evaluation-population change with a training-population change. To isolate the
+two with one unambiguous procedure, we train a single LR on the 2013J eligible population and apply it
+unchanged to the held-out 2014J presentation, scoring every registered student once and reading AUC on
+the eligible subset versus the full cohort from that same score vector (the eligible number equals the
+Table 5 transfer AUC by construction). Substantial inflation remains — **+0.06 to +0.14 AUC, mean +0.09**
+— at every checkpoint, somewhat larger than the within-cohort refit estimate. Eligibility inflation is
+therefore a property of *which students are evaluated*, not of how the model is trained. Supplement Table S2b.
 
 ## Archetypes (`table2_archetypes.csv`; `fig_feature_distributions.png`)
 Disengaged (≤1 active day): 3–11%, 72–90% at-risk · Engaged, no submission: 3–8%, 94–96% · Submitting,
